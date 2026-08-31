@@ -20,7 +20,7 @@ sns.set_theme(style="whitegrid")
 
 def plot_class_balance(df):
     """Bar chart: how many samples per gesture."""
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=(8, 5)) 
     order = sorted(df["label"].unique())
     sns.countplot(data=df, x="label", order=order, color="steelblue")
     plt.title("Samples per gesture (class balance)")
