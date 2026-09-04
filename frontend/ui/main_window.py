@@ -18,6 +18,12 @@ from frontend.ui.components import (
     Sidebar,
     PlaceholderPage,
 )
+from frontend.ui.glove_page import GlovePage
+from frontend.ui.sensors_page import SensorsPage
+from frontend.ui.translate_page import TranslatePage
+from frontend.ui.history_page import HistoryPage
+from frontend.ui.settings_page import SettingsPage
+from frontend.ui.help_page import HelpPage
 from frontend.services.api_client import api_client
 from frontend.services.tts_service import tts_service
 
@@ -87,49 +93,30 @@ class MainWindow(ctk.CTk):
         # 1. Home / Dashboard Page (Primary view for Phase 3)
         self.pages[config.PAGE_HOME] = self._build_dashboard_page(self.content_container)
 
-        # 2. Placeholders for subsequent planned phases
-        self.pages[config.PAGE_GLOVE] = PlaceholderPage(
+        # 2. Glove Status & Pairing Page (Phase 6)
+        self.pages[config.PAGE_GLOVE] = GlovePage(
             self.content_container,
-            title="Glove Status & Pairing",
-            subtitle="Device connection, diagnostics, and battery health",
-            phase_label="Scheduled for Phase 6",
-            icon="🧤"
+            on_status_change=self._on_glove_status_changed
         )
-        self.pages[config.PAGE_SENSORS] = PlaceholderPage(
+        # 3. Sensor Monitoring Page (Phase 7)
+        self.pages[config.PAGE_SENSORS] = SensorsPage(self.content_container)
+        # 4. Translation Studio Page (Phase 8)
+        self.pages[config.PAGE_TRANSLATE] = TranslatePage(
             self.content_container,
-            title="Live Sensor Telemetry",
-            subtitle="Real-time sensor telemetry channels and orientation data",
-            phase_label="Scheduled for Phase 7",
-            icon="📊"
+            on_status_change=self._on_translation_status_changed
         )
-        self.pages[config.PAGE_TRANSLATE] = PlaceholderPage(
+        # 5. Translation History Page (Phase 9)
+        self.pages[config.PAGE_HISTORY] = HistoryPage(
             self.content_container,
-            title="Sign Language Translation",
-            subtitle="Sign recognition feed display, word builder, and speech output",
-            phase_label="Scheduled for Phase 8",
-            icon="🔄"
+            on_status_change=self._on_translation_status_changed
         )
-        self.pages[config.PAGE_HISTORY] = PlaceholderPage(
+        # 6. Application Settings Page (Phase 10)
+        self.pages[config.PAGE_SETTINGS] = SettingsPage(
             self.content_container,
-            title="Translation History",
-            subtitle="Searchable archive of recognized signs and exported transcripts",
-            phase_label="Scheduled for Phase 9",
-            icon="🕒"
+            on_theme_change=self._on_theme_changed
         )
-        self.pages[config.PAGE_SETTINGS] = PlaceholderPage(
-            self.content_container,
-            title="Application Settings",
-            subtitle="Preferences, speech rate, theme configuration, and hardware parameters",
-            phase_label="Scheduled for Phase 10",
-            icon="⚙️"
-        )
-        self.pages[config.PAGE_HELP] = PlaceholderPage(
-            self.content_container,
-            title="Help & User Instructions",
-            subtitle="Step-by-step glove operation guide and system troubleshooting",
-            phase_label="Scheduled for Phase 10",
-            icon="❓"
-        )
+        # 7. Help & Documentation Page (Phase 10)
+        self.pages[config.PAGE_HELP] = HelpPage(self.content_container)
 
     def _build_dashboard_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
         """
@@ -354,13 +341,26 @@ class MainWindow(ctk.CTk):
         if page_id not in self.pages:
             return
 
-        # Hide currently active page
+        # Hide currently active page and invoke hide hook
         if self.current_page_id in self.pages:
-            self.pages[self.current_page_id].pack_forget()
+            old_page = self.pages[self.current_page_id]
+            if hasattr(old_page, "on_page_hide"):
+                old_page.on_page_hide()
+            old_page.pack_forget()
 
         # Display newly selected page
-        self.pages[page_id].pack(fill="both", expand=True)
+        new_page = self.pages[page_id]
+        new_page.pack(fill="both", expand=True)
         self.current_page_id = page_id
+
+        # Refresh page view if dynamic or invoke show hook
+        if hasattr(new_page, "on_page_show"):
+            new_page.on_page_show()
+        elif hasattr(new_page, "refresh_ui"):
+            new_page.refresh_ui()
+
+        if page_id == config.PAGE_HOME:
+            self._update_dashboard_kpis()
 
         # Update sidebar active button
         self.sidebar.set_active(page_id)
@@ -376,6 +376,51 @@ class MainWindow(ctk.CTk):
             config.PAGE_HELP: "Help & Documentation",
         }
         self.header.set_title(page_labels.get(page_id, "Page"))
+
+    def _on_glove_status_changed(self):
+        """Callback triggered when glove connection status changes."""
+        self._sync_telemetry()
+        self._update_dashboard_kpis()
+
+    def _on_translation_status_changed(self):
+        """Callback triggered when translation or detection status changes."""
+        self._sync_telemetry()
+        self._update_dashboard_kpis()
+
+    def _on_theme_changed(self):
+        """Callback triggered when user switches color appearance mode in Settings."""
+        if config.PAGE_GLOVE in self.pages and hasattr(self.pages[config.PAGE_GLOVE], "refresh_ui"):
+            self.pages[config.PAGE_GLOVE].refresh_ui()
+
+    def _update_dashboard_kpis(self):
+        """Update Home/Dashboard metric cards to reflect live telemetry."""
+        glove_info = api_client.get_glove_status()
+        if glove_info["connected"]:
+            self.card_glove_stat.update_value(
+                "Connected",
+                f"{glove_info['device_name']} (Simulated) • {glove_info['battery']}% Battery"
+            )
+            self.card_glove_stat.lbl_value.configure(text_color=styles.COLOR_STATUS_CONNECTED)
+        else:
+            self.card_glove_stat.update_value("Disconnected", "No device paired")
+            self.card_glove_stat.lbl_value.configure(text_color=styles.COLOR_STATUS_DISCONNECTED)
+
+        sys_state = api_client.get_system_state()
+        self.card_system_stat.update_value(
+            sys_state,
+            "Frontend ready for detection" if sys_state == "Ready" else f"Detection {sys_state.lower()}"
+        )
+
+        curr_trans = api_client.get_current_translation()
+        self.card_sign_stat.update_value(
+            curr_trans["sign"],
+            f"Confidence: {int(curr_trans['confidence'] * 100)}% (Simulated)"
+        )
+        self.lbl_sign_val.configure(text=curr_trans["sign"])
+        self.lbl_trans_val.configure(text=f'"{curr_trans["translation"]}"' if curr_trans["sign"] != "—" else curr_trans["translation"])
+
+        history_count = len(api_client.get_history())
+        self.card_history_stat.update_value(f"{history_count} Saved", "Simulated session records")
 
     def _sync_telemetry(self):
         """Periodic background callback to refresh telemetry indicators."""

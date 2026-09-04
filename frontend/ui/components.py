@@ -180,13 +180,16 @@ class ActionButton(ctk.CTkButton):
             },
         }
         cfg = variant_config.get(variant, variant_config["primary"])
+        btn_height = kwargs.pop("height", 38)
+        btn_font = kwargs.pop("font", styles.FONT_BODY_BOLD)
+        btn_radius = kwargs.pop("corner_radius", styles.RADIUS_BUTTON)
         super().__init__(
             master,
             text=text,
             command=command,
-            font=styles.FONT_BODY_BOLD,
-            corner_radius=styles.RADIUS_BUTTON,
-            height=38,
+            font=btn_font,
+            corner_radius=btn_radius,
+            height=btn_height,
             **cfg,
             **kwargs
         )

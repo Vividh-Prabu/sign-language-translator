@@ -1,18 +1,18 @@
-"""
-API Client and Service Layer for Sign Language Translator.
-Provides a mock data implementation suitable for frontend development,
-structured to allow seamless swapping with real HTTP/WebSocket backend endpoints.
-"""
-
+import json
+import logging
+import urllib.request
+import urllib.error
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import frontend.config as config
+
+logger = logging.getLogger(__name__)
 
 
 class ApiClient:
     """
     Service client for communication between Frontend GUI and Backend/Hardware.
-    Currently operates in Mock mode to supply realistic telemetry and translation events.
+    Supports real HTTP API integration with graceful fallback to simulated mock data.
     """
 
     def __init__(self, base_url: str = config.API_BASE_URL, use_mock: bool = config.USE_MOCK_DATA):
@@ -58,9 +58,31 @@ class ApiClient:
             },
         }
 
+    def _request_endpoint(self, method: str, endpoint: str, payload: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Attempt to dispatch an HTTP request to the real backend API.
+        If the backend server is unreachable or offline, catches the exception and falls back to mock data.
+        """
+        if self.use_mock:
+            return None
+
+        url = f"{self.base_url}{endpoint}"
+        try:
+            req_data = json.dumps(payload).encode("utf-8") if payload else None
+            req = urllib.request.Request(url, data=req_data, method=method)
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=1.5) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except Exception as e:
+            logger.debug(f"Backend API unavailable at {url} ({e}). Falling back to simulated mock data.")
+            return None
+
     # --- Glove Hardware Status ---
     def get_glove_status(self) -> Dict[str, Any]:
         """Fetch current status of the sensor glove."""
+        remote = self._request_endpoint("GET", "/glove/status")
+        if remote:
+            return remote
         return {
             "connected": self._glove_connected,
             "device_name": self._device_name if self._glove_connected else "None",
@@ -114,9 +136,79 @@ class ApiClient:
         """Fetch real-time sensor metrics."""
         return self._sensor_data
 
+    def get_sensor_channels(self) -> List[Dict[str, Any]]:
+        """
+        Fetch configurable sensor channels.
+        Structured to allow dynamic sensor remapping once hardware specs are confirmed.
+        """
+        fingers = self._sensor_data.get("fingers", {})
+        channel_names = list(fingers.keys())
+        channels = []
+        for idx, name in enumerate(channel_names):
+            val = fingers[name]
+            channels.append({
+                "channel_id": f"CH{idx + 1}",
+                "name": f"Channel {idx + 1} ({name})",
+                "short_name": name,
+                "value": val,
+                "min": 0,
+                "max": 100,
+                "raw_adc": int(val * 40.95),  # 12-bit ADC simulation (0-4095)
+            })
+        return channels
+
+    def get_orientation_data(self) -> Dict[str, float]:
+        """Fetch orientation/motion telemetry channels (Simulated)."""
+        return dict(self._sensor_data.get("orientation", {}))
+
+    def calibrate_sensors(self) -> bool:
+        """Simulate baseline/tare calibration of all active channels."""
+        # Sets baseline offset state
+        return True
+
+    def get_raw_packet(self) -> Dict[str, Any]:
+        """Fetch raw simulated telemetry packet payload for diagnostics."""
+        channels = [c["value"] for c in self.get_sensor_channels()]
+        return {
+            "device": self._device_name if self._glove_connected else "Offline",
+            "connected": self._glove_connected,
+            "channels": channels,
+            "orientation": self.get_orientation_data(),
+            "battery": self._battery_level if self._glove_connected else 0,
+            "timestamp": round(datetime.now().timestamp(), 3),
+            "rate_hz": 50,
+        }
+
     # --- Translation Data & Operations ---
     def get_current_translation(self) -> Dict[str, Any]:
         """Get the latest recognized sign and translation."""
+        return self._current_translation
+
+    def get_next_mock_sign(self) -> Dict[str, Any]:
+        """
+        Simulate the receipt of a newly recognized sign from the ML/backend service.
+        Advances through realistic test signs with high confidence ratings.
+        """
+        mock_signs = [
+            {"sign": "HELLO", "translation": "Hello", "confidence": 0.95},
+            {"sign": "THANK YOU", "translation": "Thank you", "confidence": 0.93},
+            {"sign": "YES", "translation": "Yes", "confidence": 0.98},
+            {"sign": "NO", "translation": "No", "confidence": 0.91},
+            {"sign": "PLEASE", "translation": "Please", "confidence": 0.94},
+            {"sign": "HELP", "translation": "Help", "confidence": 0.89},
+            {"sign": "GOOD", "translation": "Good", "confidence": 0.96},
+        ]
+        if not hasattr(self, "_mock_sign_idx"):
+            self._mock_sign_idx = 0
+
+        item = mock_signs[self._mock_sign_idx % len(mock_signs)]
+        self._mock_sign_idx += 1
+        self._current_translation = {
+            "sign": item["sign"],
+            "translation": item["translation"],
+            "confidence": item["confidence"],
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+        }
         return self._current_translation
 
     def clear_current_translation(self) -> None:
